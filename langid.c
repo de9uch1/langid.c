@@ -1,6 +1,7 @@
 /* 
  * Command-line driver for liblangid
  *
+ * Hiroyuki Deguchi <deguchi@ai.cs.ehime-u.ac.jp>, October 2019
  * Marco Lui <saffsd@gmail.com>, September 2014
  */
 #include <unistd.h>
@@ -28,7 +29,7 @@ int main(int argc, char **argv){
 
     /* for use with getopt */
     char *model_path = NULL;
-    int c, l_flag = 0, b_flag = 0;
+    int c, l_flag = 0, b_flag = 0, f_flag = 0;
     opterr = 0;
 
 #ifdef DEBUG
@@ -41,7 +42,7 @@ int main(int argc, char **argv){
      * m: load a model file
      */
 
-    while ((c = getopt (argc, argv, "lbm:")) != -1) 
+    while ((c = getopt (argc, argv, "lbmf:")) != -1)
       switch (c) {
         case 'l':
           l_flag = 1;
@@ -51,6 +52,9 @@ int main(int argc, char **argv){
           break;
         case 'm':
           model_path = optarg;
+          break;
+        case 'f':
+          f_flag = 1;
           break;
         case '?':
           if (optopt == 'm')
@@ -67,8 +71,8 @@ int main(int argc, char **argv){
       }
 
     /* validate getopt options */
-    if (l_flag && b_flag) {
-      fprintf(stderr, "Cannot specify both -l and -b.\n");
+    if (l_flag && b_flag && f_flag) {
+      fprintf(stderr, "Cannot specify both -l and -b and -f.\n");
       exit(-1);
     }
     
@@ -80,7 +84,60 @@ int main(int argc, char **argv){
      * the three modes are file-mode (default), line-mode and batch-mode
      */
 
-    if (isatty(fileno(stdin))){
+    if (f_flag) { /*filter mode*/
+      printf("langid.c filtering mode.\n");
+      const char *src_lang, *tgt_lang;
+      FILE *fp_src_file, *fp_tgt_file, *fp_src_dest, *fp_tgt_dest;
+      size_t src_size=16 * 1024, tgt_size=16 * 1024;
+      char src_file[path_size], tgt_file[path_size], src_dest[path_size], tgt_dest[path_size];
+      ssize_t src_len, tgt_len;
+      char *src_text = NULL, *tgt_text = NULL; /* NULL init required for use with getline/getdelim*/
+
+      char *prefix = argv[2];
+      char *src = argv[3];
+      char *tgt = argv[4];
+      char *dest_prefix = argv[5];
+
+      sprintf(src_file, "%s.%s", prefix, src);
+      sprintf(tgt_file, "%s.%s", prefix, tgt);
+      sprintf(src_dest, "%s.%s", dest_prefix, src);
+      sprintf(tgt_dest, "%s.%s", dest_prefix, tgt);
+
+      fp_src_file = fopen(src_file, "r");
+      fp_tgt_file = fopen(tgt_file, "r");
+      fp_src_dest = fopen(src_dest, "w");
+      fp_tgt_dest = fopen(tgt_dest, "w");
+
+      if (fp_src_file == NULL || fp_tgt_file == NULL ||
+          fp_src_dest == NULL || fp_tgt_dest == NULL) {
+        fprintf(stderr, "file open error.");
+        goto cleanup;
+        return -1;
+      }
+      else {
+        while ((src_len = getline(&src_text, &src_size, fp_src_file)) != -1 &&
+               (tgt_len = getline(&tgt_text, &tgt_size, fp_tgt_file)) != -1){
+          src_lang = identify(lid, src_text, src_len);
+          tgt_lang = identify(lid, tgt_text, tgt_len);
+          if ((strcmp(src_lang, src) == 0) && (strcmp(tgt_lang, tgt) == 0)) {
+            fprintf(fp_src_dest, "%s", src_text);
+            fprintf(fp_tgt_dest, "%s", tgt_text);
+          }
+        }
+        goto cleanup;
+        free(src_text);
+        free(tgt_text);
+        return 0;
+      }
+
+    cleanup:
+      if (fp_src_file != NULL) fclose(fp_src_file);
+      if (fp_tgt_file != NULL) fclose(fp_tgt_file);
+      if (fp_src_dest != NULL) fclose(fp_src_dest);
+      if (fp_tgt_dest != NULL) fclose(fp_tgt_dest);
+
+    }
+    else if (isatty(fileno(stdin))){
       printf("langid.c interactive mode.\n");
 
       for(;;) {
