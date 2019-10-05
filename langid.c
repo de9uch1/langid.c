@@ -10,12 +10,14 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include "liblangid.h"
 
 const char* no_file = "NOSUCHFILE";
 const char* not_file = "NOTAFILE";
 
+void rstrip_ln(char *str);
 
 int main(int argc, char **argv){
     const char* lang;
@@ -87,12 +89,13 @@ int main(int argc, char **argv){
     if (f_flag) { /*filter mode*/
       printf("langid.c filtering mode.\n");
       const char *src_lang, *tgt_lang;
-      FILE *fp_src_file, *fp_tgt_file, *fp_src_dest, *fp_tgt_dest;
-      size_t src_size=16 * 1024, tgt_size=16 * 1024;
-      char src_file[path_size], tgt_file[path_size], src_dest[path_size], tgt_dest[path_size];
+      FILE *fp_src_file, *fp_tgt_file, *fp_src_dest, *fp_tgt_dest, *fp_src_lid, *fp_tgt_lid;
+      size_t src_size = 16 * 1024, tgt_size = 16 * 1024;
+      char src_file[path_size], tgt_file[path_size];
+      char src_dest[path_size], tgt_dest[path_size];
+      char src_lid[path_size], tgt_lid[path_size];
       ssize_t src_len, tgt_len;
-      char *src_text = NULL, *tgt_text = NULL; /* NULL init required for use with getline/getdelim*/
-
+      char *src_text = NULL, *tgt_text = NULL, *src_l = NULL, *tgt_l = NULL; /* NULL init required for use with getline/getdelim*/
       char *prefix = argv[2];
       char *src = argv[3];
       char *tgt = argv[4];
@@ -102,24 +105,58 @@ int main(int argc, char **argv){
       sprintf(tgt_file, "%s.%s", prefix, tgt);
       sprintf(src_dest, "%s.%s", dest_prefix, src);
       sprintf(tgt_dest, "%s.%s", dest_prefix, tgt);
+      sprintf(src_lid, "%s.lid.%s", prefix, src);
+      sprintf(tgt_lid, "%s.lid.%s", prefix, tgt);
 
       fp_src_file = fopen(src_file, "r");
       fp_tgt_file = fopen(tgt_file, "r");
       fp_src_dest = fopen(src_dest, "w");
       fp_tgt_dest = fopen(tgt_dest, "w");
+      fp_src_lid = fopen(src_lid, "w+");
+      fp_tgt_lid = fopen(tgt_lid, "w+");
 
       if (fp_src_file == NULL || fp_tgt_file == NULL ||
-          fp_src_dest == NULL || fp_tgt_dest == NULL) {
+          fp_src_dest == NULL || fp_tgt_dest == NULL ||
+          fp_src_lid == NULL || fp_tgt_lid == NULL) {
         fprintf(stderr, "file open error.");
         goto cleanup;
         return -1;
       }
       else {
-        while ((src_len = getline(&src_text, &src_size, fp_src_file)) != -1 &&
-               (tgt_len = getline(&tgt_text, &tgt_size, fp_tgt_file)) != -1){
-          src_lang = identify(lid, src_text, src_len);
+        int status = 0;
+        pid_t wait_pid;
+        pid_t pid = fork();
+        if (pid < 0) {
+          fprintf(stderr, "fork error.");
+          return -1;
+        }
+        else if (pid == 0) {
+          while ((src_len = getline(&src_text, &src_size, fp_src_file)) != -1) {
+            src_lang = identify(lid, src_text, src_len);
+            fprintf(fp_src_lid, "%s\n", src_lang);
+          }
+          exit(0);
+        }
+        while ((tgt_len = getline(&tgt_text, &tgt_size, fp_tgt_file)) != -1){
           tgt_lang = identify(lid, tgt_text, tgt_len);
-          if ((strcmp(src_lang, src) == 0) && (strcmp(tgt_lang, tgt) == 0)) {
+          fprintf(fp_tgt_lid, "%s\n", tgt_lang);
+        }
+        wait_pid = wait(&status);
+        if (wait_pid < 0) {
+          fprintf(stderr, "wait error.");
+          return -1;
+        }
+        fseek(fp_src_file, 0L, SEEK_SET);
+        fseek(fp_tgt_file, 0L, SEEK_SET);
+        fseek(fp_src_lid, 0L, SEEK_SET);
+        fseek(fp_tgt_lid, 0L, SEEK_SET);
+        while ((src_len = getline(&src_text, &src_size, fp_src_file)) != -1 &&
+               (tgt_len = getline(&tgt_text, &tgt_size, fp_tgt_file)) != -1 &&
+               (src_len = getline(&src_l, &path_size, fp_src_lid)) != -1 &&
+               (tgt_len = getline(&tgt_l, &path_size, fp_tgt_lid)) != -1) {
+          rstrip_ln(src_l);
+          rstrip_ln(tgt_l);
+          if ((strcmp(src_l, src) == 0) && (strcmp(tgt_l, tgt) == 0)) {
             fprintf(fp_src_dest, "%s", src_text);
             fprintf(fp_tgt_dest, "%s", tgt_text);
           }
@@ -127,6 +164,10 @@ int main(int argc, char **argv){
         goto cleanup;
         free(src_text);
         free(tgt_text);
+        free(src_l);
+        free(tgt_l);
+        unlink(src_lid);
+        unlink(tgt_lid);
         return 0;
       }
 
@@ -135,6 +176,8 @@ int main(int argc, char **argv){
       if (fp_tgt_file != NULL) fclose(fp_tgt_file);
       if (fp_src_dest != NULL) fclose(fp_src_dest);
       if (fp_tgt_dest != NULL) fclose(fp_tgt_dest);
+      if (fp_src_lid != NULL) fclose(fp_src_lid);
+      if (fp_tgt_lid != NULL) fclose(fp_tgt_lid);
 
     }
     else if (isatty(fileno(stdin))){
@@ -201,4 +244,11 @@ int main(int argc, char **argv){
     return 0;
 }
 
-
+void rstrip_ln(char *str)
+{
+    char *p;
+    p = strchr(str, '\n');
+    if (p != NULL) {
+        *p = '\0';
+    }
+}
